@@ -123,6 +123,7 @@ func (mw *MultiWallet) Shutdown() {
 	// Trigger shuttingDown signal to cancel all contexts created with `shutdownContextWithCancel`.
 	mw.shuttingDown <- true
 
+	mw.closeWsConn()
 	mw.CancelRescan()
 	mw.CancelSync()
 
