@@ -3,7 +3,6 @@ package dcrlibwallet
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,8 +34,6 @@ type MultiWallet struct {
 	notificationListenersMu         sync.RWMutex
 	txAndBlockNotificationListeners map[string]TxAndBlockNotificationListener
 	blocksRescanProgressListener    BlocksRescanProgressListener
-
-	httpClient *http.Client
 
 	shuttingDown chan bool
 	cancelFuncs  []context.CancelFunc
@@ -109,9 +106,6 @@ func NewMultiWallet(rootDir, dbDriver, netType string) (*MultiWallet, error) {
 		}
 		mw.wallets[wallet.ID] = wallet
 	}
-
-	// create http client
-	mw.createHTTPClient()
 
 	mw.listenForShutdown()
 
