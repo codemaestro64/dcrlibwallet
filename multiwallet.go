@@ -123,7 +123,7 @@ func (mw *MultiWallet) Shutdown() {
 	// Trigger shuttingDown signal to cancel all contexts created with `shutdownContextWithCancel`.
 	mw.shuttingDown <- true
 
-	mw.Politeia.CloseWsConn()
+	//mw.Politeia.CloseWsConn()
 	mw.CancelRescan()
 	mw.CancelSync()
 

@@ -9,7 +9,10 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -22,16 +25,30 @@ const (
 	proposalDetailsPath = "/proposals/%s"
 	voteStatusPath      = "/proposals/%s/votestatus"
 	votesStatusPath     = "/proposals/votestatus"
+	loginPath           = "/login"
+	wsPath              = endpointPath + "/aws"
 )
 
+type header struct {
+	name      string
+	value     string
+	expiresAt time.Time
+}
+
 type Politeia struct {
-	csrfToken    string
-	cookie       *http.Cookie
-	serverPolicy *ServerPolicy
+	serverPolicy         *ServerPolicy
+	notificationListener ProposalNotificationListener
+	requestHeaders       map[string][]header
+	user                 User
+
+	wsConn *websocket.Conn
 }
 
 func NewPoliteia() Politeia {
-	return Politeia{}
+	p := Politeia{
+		requestHeaders: make(map[string][]header),
+	}
+	return p
 }
 
 func (p *Politeia) prepareRequest(path, method string, queryStrings map[string]string, body []byte) (*http.Request, error) {
@@ -53,16 +70,31 @@ func (p *Politeia) prepareRequest(path, method string, queryStrings map[string]s
 	}
 
 	if method == "POST" {
-		if p.csrfToken == "" {
+		if _, ok := p.requestHeaders["X-CSRF-TOKEN"]; !ok {
 			if err := p.getCSRFToken(); err != nil {
 				return nil, err
 			}
 		}
-		req.Header.Set("X-CSRF-TOKEN", p.csrfToken)
-		req.AddCookie(p.cookie)
+		p.setRequestHeaders(req)
 	}
 
 	return req, nil
+}
+
+func (p *Politeia) setRequestHeaders(req *http.Request) {
+	req.Header = make(http.Header)
+	for key, val := range p.requestHeaders {
+		switch key {
+		case "X-CSRF-TOKEN":
+			req.Header.Set("X-CSRF-TOKEN", val[0].value)
+		case "cookies":
+			cookieStr := ""
+			for _, ck := range val {
+				cookieStr += ck.name + "=" + ck.value + ";"
+			}
+			req.Header.Set("cookie", cookieStr)
+		}
+	}
 }
 
 func (p *Politeia) getCSRFToken() error {
@@ -75,14 +107,15 @@ func (p *Politeia) getCSRFToken() error {
 	if err != nil {
 		return fmt.Errorf("error fetching csrf token")
 	}
-
-	p.csrfToken = res.Header.Get("X-CSRF-TOKEN")
+	p.requestHeaders["X-CSRF-TOKEN"] = []header{{value: res.Header.Get("X-CSRF-TOKEN")}}
 
 	for _, v := range res.Cookies() {
-		if v.Name == "_gorilla_csrf" {
-			p.cookie = v
-			break
+		ck := header{
+			name:      v.Name,
+			value:     v.Value,
+			expiresAt: v.Expires,
 		}
+		p.requestHeaders["cookies"] = append(p.requestHeaders["cookies"], ck)
 	}
 
 	return nil
@@ -99,6 +132,16 @@ func (p *Politeia) makeRequest(path, method string, queryStrings map[string]stri
 		return err
 	}
 
+	sessionCookie := res.Header.Get("Set-Cookie")
+	if sessionCookie != "" {
+		s := strings.Split(strings.Replace(sessionCookie, "session=", "", -1), ";")
+		h := header{
+			name:  "session",
+			value: s[0],
+		}
+		p.requestHeaders["cookies"] = append(p.requestHeaders["cookies"], h)
+	}
+
 	return p.handleResponse(res, dest)
 }
 
@@ -110,12 +153,18 @@ func (p *Politeia) handleResponse(res *http.Response, dest interface{}) error {
 		return errors.New("resource not found")
 	case http.StatusInternalServerError:
 		return errors.New("internal server error")
+	case http.StatusUnauthorized:
+		var errResp Err
+		if err := p.marshalResponse(res, &errResp); err != nil {
+			return err
+		}
+		return fmt.Errorf(ErrorStatus[errResp.Code])
 	case http.StatusBadRequest:
 		var errResp Err
 		if err := p.marshalResponse(res, &errResp); err != nil {
 			return err
 		}
-		return fmt.Errorf("bad request: %s", ErrorStatus[errResp.Code])
+		return fmt.Errorf(ErrorStatus[errResp.Code])
 	}
 
 	return errors.New("an unknown error occurred")

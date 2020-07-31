@@ -346,3 +346,11 @@ type VoteStatus struct {
 type VotesStatus struct {
 	VotesStatus []VoteStatus `json:"votesstatus"`
 }
+
+type Login struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type User struct {
+}
